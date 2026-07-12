@@ -1,0 +1,19 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+
+# Signing secrets — never commit
+/keystore/
+keystore.properties
+*.jks
+*.keystore
+
+# Build artifacts / distributables
+/dist/
