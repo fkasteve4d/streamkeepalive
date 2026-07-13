@@ -79,6 +79,14 @@ class KeepAliveService : Service() {
                 whenPaired { startCommercialAssist(duration) }
             }
             ACTION_CANCEL_COMMERCIAL -> cancelCommercialAssist()
+            ACTION_TOGGLE_MAIN_POWER -> toggleMainPower()
+            ACTION_TOGGLE_ZONE2_POWER -> toggleZone2Power()
+            ACTION_QUERY_ZONES -> queryZones()
+            ACTION_DPAD -> intent.getStringExtra(EXTRA_BUTTON)?.let { webOsClient.sendButton(it) }
+            ACTION_SOUND_MODE -> intent.getStringExtra(EXTRA_MODE)?.let { mode ->
+                KeepAliveState.activeSoundMode.value = mode
+                scope.launch { denonClient.sendSoundMode(prefs.receiverIp, mode) }
+            }
             ACTION_STOP -> stopAll()
         }
         return START_NOT_STICKY
@@ -140,6 +148,7 @@ class KeepAliveService : Service() {
             webOsClient.setMute(false)
             denonClient.setMute(prefs.receiverIp, false)
             updateNotification()
+            startLoop() // countdown finished naturally — hand off into the keep-alive loop
         }
     }
 
@@ -152,6 +161,36 @@ class KeepAliveService : Service() {
             webOsClient.setMute(false)
             denonClient.setMute(prefs.receiverIp, false)
             updateNotification()
+        }
+    }
+
+    // Optimistic flip for instant UI feedback, then re-query the real state shortly after —
+    // if the command actually failed, this self-corrects instead of leaving a stale/wrong
+    // indicator (which previously misrouted the volume rocker to a zone that wasn't really on).
+    private fun toggleMainPower() {
+        val newState = !(KeepAliveState.mainZoneOn.value ?: false)
+        KeepAliveState.mainZoneOn.value = newState
+        scope.launch {
+            denonClient.setMainZonePower(prefs.receiverIp, newState)
+            delay(500)
+            KeepAliveState.mainZoneOn.value = denonClient.isMainZoneOn(prefs.receiverIp) ?: newState
+        }
+    }
+
+    private fun toggleZone2Power() {
+        val newState = !(KeepAliveState.zone2On.value ?: false)
+        KeepAliveState.zone2On.value = newState
+        scope.launch {
+            denonClient.setZone2Power(prefs.receiverIp, newState)
+            delay(500)
+            KeepAliveState.zone2On.value = denonClient.isZone2On(prefs.receiverIp) ?: newState
+        }
+    }
+
+    private fun queryZones() {
+        scope.launch {
+            KeepAliveState.mainZoneOn.value = denonClient.isMainZoneOn(prefs.receiverIp)
+            KeepAliveState.zone2On.value = denonClient.isZone2On(prefs.receiverIp)
         }
     }
 
@@ -237,8 +276,15 @@ class KeepAliveService : Service() {
         private const val ACTION_STOP_LOOP = "com.streamkeepalive.app.STOP_LOOP"
         private const val ACTION_START_COMMERCIAL = "com.streamkeepalive.app.START_COMMERCIAL"
         private const val ACTION_CANCEL_COMMERCIAL = "com.streamkeepalive.app.CANCEL_COMMERCIAL"
+        private const val ACTION_TOGGLE_MAIN_POWER = "com.streamkeepalive.app.TOGGLE_MAIN_POWER"
+        private const val ACTION_TOGGLE_ZONE2_POWER = "com.streamkeepalive.app.TOGGLE_ZONE2_POWER"
+        private const val ACTION_QUERY_ZONES = "com.streamkeepalive.app.QUERY_ZONES"
+        private const val ACTION_DPAD = "com.streamkeepalive.app.DPAD"
+        private const val ACTION_SOUND_MODE = "com.streamkeepalive.app.SOUND_MODE"
         private const val ACTION_STOP = "com.streamkeepalive.app.STOP"
         private const val EXTRA_DURATION = "duration_seconds"
+        private const val EXTRA_BUTTON = "button"
+        private const val EXTRA_MODE = "mode"
 
         fun connect(context: Context) {
             context.startForegroundService(Intent(context, KeepAliveService::class.java).setAction(ACTION_CONNECT))
@@ -262,6 +308,30 @@ class KeepAliveService : Service() {
 
         fun cancelCommercialAssist(context: Context) {
             context.startService(Intent(context, KeepAliveService::class.java).setAction(ACTION_CANCEL_COMMERCIAL))
+        }
+
+        fun toggleMainPower(context: Context) {
+            context.startService(Intent(context, KeepAliveService::class.java).setAction(ACTION_TOGGLE_MAIN_POWER))
+        }
+
+        fun toggleZone2Power(context: Context) {
+            context.startService(Intent(context, KeepAliveService::class.java).setAction(ACTION_TOGGLE_ZONE2_POWER))
+        }
+
+        fun queryZones(context: Context) {
+            context.startService(Intent(context, KeepAliveService::class.java).setAction(ACTION_QUERY_ZONES))
+        }
+
+        fun sendDpad(context: Context, button: String) {
+            context.startService(
+                Intent(context, KeepAliveService::class.java).setAction(ACTION_DPAD).putExtra(EXTRA_BUTTON, button)
+            )
+        }
+
+        fun sendSoundMode(context: Context, mode: String) {
+            context.startService(
+                Intent(context, KeepAliveService::class.java).setAction(ACTION_SOUND_MODE).putExtra(EXTRA_MODE, mode)
+            )
         }
 
         fun stop(context: Context) {

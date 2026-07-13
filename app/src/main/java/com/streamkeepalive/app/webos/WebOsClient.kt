@@ -34,6 +34,12 @@ class WebOsClient(
     private var requestCounter = 0
     private var paired = false
 
+    // D-pad navigation goes over a *second* WebSocket, whose URL webOS hands back from a
+    // request on the main socket — requested lazily on first button press, then reused.
+    private var pointerSocket: WebSocket? = null
+    private var pointerRequestId: String? = null
+    private val pendingButtons = mutableListOf<String>()
+
     fun connect(ip: String, existingClientKey: String?) {
         paired = false
         onStateChanged(WebOsConnectionState.CONNECTING, null)
@@ -44,12 +50,58 @@ class WebOsClient(
         webSocket?.close(1000, "bye")
         webSocket = null
         paired = false
+        pointerSocket?.close(1000, "bye")
+        pointerSocket = null
+        pointerRequestId = null
+        pendingButtons.clear()
     }
 
     fun sendPlay() = sendCommand("ssap://media.controls/play")
     fun sendPause() = sendCommand("ssap://media.controls/pause")
+    fun turnOff() = sendCommand("ssap://system/turnOff")
     fun setMute(mute: Boolean) =
         sendCommand("ssap://audio/setMute", JSONObject().put("mute", mute))
+
+    /** Sends a D-pad button press: "UP", "DOWN", "LEFT", "RIGHT", or "ENTER". */
+    fun sendButton(name: String) {
+        val ps = pointerSocket
+        if (ps != null) {
+            ps.send("type:button\nname:$name\n\n")
+            return
+        }
+        pendingButtons.add(name)
+        if (pointerRequestId == null) {
+            val id = "pointer_${requestCounter++}"
+            pointerRequestId = id
+            val message = JSONObject()
+                .put("type", "request")
+                .put("id", id)
+                .put("uri", "ssap://com.webos.service.networkinput/getPointerInputSocket")
+                .put("payload", JSONObject())
+            webSocket?.send(message.toString())
+        }
+    }
+
+    private fun connectPointerSocket(url: String) {
+        val request = Request.Builder().url(url).build()
+        pointerSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                pendingButtons.forEach { ws.send("type:button\nname:$it\n\n") }
+                pendingButtons.clear()
+            }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                Log.w(TAG, "pointer socket failed", t)
+                pointerSocket = null
+                pointerRequestId = null
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                pointerSocket = null
+                pointerRequestId = null
+            }
+        })
+    }
 
     private fun tryConnect(ip: String, existingClientKey: String?, useTls: Boolean) {
         // webOS exposes an unencrypted port (3000, older/legacy) and a TLS port with a
@@ -87,11 +139,15 @@ class WebOsClient(
         }
         when (json.optString("type")) {
             "response" -> {
-                if (json.optString("id") == REGISTER_ID) {
+                val id = json.optString("id")
+                if (id == REGISTER_ID) {
                     val pairingType = json.optJSONObject("payload")?.optString("pairingType")
                     if (pairingType == "PROMPT") {
                         onStateChanged(WebOsConnectionState.AWAITING_TV_PROMPT, null)
                     }
+                } else if (id == pointerRequestId) {
+                    val socketPath = json.optJSONObject("payload")?.optString("socketPath")
+                    if (!socketPath.isNullOrEmpty()) connectPointerSocket(socketPath)
                 }
             }
             "registered" -> {
@@ -133,6 +189,7 @@ class WebOsClient(
                         "LAUNCH", "LAUNCH_WEBAPP", "APP_TO_APP", "CLOSE",
                         "CONTROL_AUDIO", "CONTROL_DISPLAY",
                         "CONTROL_INPUT_MEDIA_PLAYBACK", "CONTROL_INPUT_TV",
+                        "CONTROL_MOUSE_AND_KEYBOARD", "CONTROL_POWER",
                         "READ_APP_STATUS", "READ_CURRENT_CHANNEL",
                         "READ_RUNNING_APPS", "READ_NETWORK_STATE",
                         "WRITE_NOTIFICATION_TOAST", "READ_POWER_STATE"

@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
  *  - [countdownRemaining]        seconds left in a commercial-assist countdown, null when idle.
  *  - [loopIntervalSeconds]       keep-alive pulse interval, 60..600 (1-10 min).
  *  - [commercialDurationSeconds] commercial-assist mute duration, 15..240 (15s steps).
+ *  - [mainZoneOn] / [zone2On]    Denon zone power state; null = unknown (not yet queried).
+ *      Refreshed on demand (panel expand, after a toggle) rather than polled continuously.
+ *  - [activeSoundMode]           "MOVIE" or "MUSIC" (or null), tracked optimistically from
+ *      the last button tapped — not queried from the receiver.
  */
 object KeepAliveState {
     val connectionState = MutableStateFlow(WebOsConnectionState.DISCONNECTED)
@@ -22,4 +26,7 @@ object KeepAliveState {
     val countdownRemaining = MutableStateFlow<Int?>(null)
     val loopIntervalSeconds = MutableStateFlow(60)
     val commercialDurationSeconds = MutableStateFlow(60)
+    val mainZoneOn = MutableStateFlow<Boolean?>(null)
+    val zone2On = MutableStateFlow<Boolean?>(null)
+    val activeSoundMode = MutableStateFlow<String?>(null)
 }
